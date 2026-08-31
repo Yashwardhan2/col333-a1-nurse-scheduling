@@ -130,6 +130,57 @@ Where the handout is ambiguous, the verifier is the ground truth:
 - **H5** only kicks in when `D >= 6`; the loop is over windows `[start, start+5]`.
 - Coverage is exact, not a minimum: `#M + #B == m`, `#A + #B == a`, `#E == e`.
 
+## Piazza clarifications (A1 Discussion Thread)
+
+Authoritative answers from the instructor/TAs. Where these conflict with the handout PDF,
+these win.
+
+**Spec**
+
+- **[24 Aug] H7 verifier fix.** The shipped verifier had `!= "R"`; it is now `== "B"`. Our
+  `verifier.py` is the fixed copy. H7 = every `S` day has at least one surgical nurse on `B`.
+- **[26 Aug] No `B` on general days.** `B` is legal only on `S` days. Confirmed twice.
+- **H1 vs H8, "shift" is overloaded.** H1: each nurse gets at most one *shift type* per day
+  from `{M,A,E,B}` (surgical) or `{M,A,E}` (general), else `R`. H8: `B` counts as **two**
+  shifts towards `K`. No contradiction — two different notions of "shift".
+- The handout's H7 wording (">= 1 surgical nurse on B") is correct; the old verifier was the bug.
+
+**Time budget**
+
+- `T` is the **per-instance** time limit, and it is enforced: *"If your algorithm does not
+  terminate within T, it will be terminated."*
+- Rough tiers: easy instances up to ~5 min, medium up to ~10 min, hard up to 20 min.
+  The 20 min figure ([22 Aug] raised from 10) is the ceiling for the hardest tier, not a
+  per-instance grant.
+
+**Scoring**
+
+- **Part A:** validity is a gate; among valid solutions, **time taken is the only criterion**
+  — the *actual* runtime, not the budget. So return the moment a valid roster exists.
+- **Part B:** **cost is primary**; runtime is only a tie-break among equal-cost solutions.
+  So spend the budget, but stop early once the cost cannot improve.
+- Infeasible instances are graded separately; the verifier only ever sees feasible ones, so
+  `{}` printing `INVALID` is expected and fine.
+
+**Rules**
+
+- Standard-library modules such as `collections.deque` are allowed.
+- **z3 and other constraint solvers are not allowed** (also absent from the eval env).
+- *"You are only allowed to use the algorithms taught in class and its extensions."*
+  Own heuristics, orderings and efficient search are fine; a wholly different class of
+  technique is not. Keep the write-up anchored in CSP backtracking / ordering heuristics /
+  propagation / local search.
+
+**Part B independence**
+
+- `part_b.py` must run **standalone** from the input CSV. It must not assume `part_a.py` has
+  run or that a Part A `solution.json` exists. Copying Part A code into it is explicitly fine.
+- Both parts write the roster to the output path given as `argv[2]`.
+
+**Misc**
+
+- TAs said they would release a few more test cases *with expected times*. Watch the thread.
+
 ## Sample instances
 
 | file | N | D | Ns | m,a,e | K | days |
