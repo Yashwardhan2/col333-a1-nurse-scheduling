@@ -223,6 +223,36 @@ class Instance:
                 return ("surgical days need %d B shifts but the surgical nurses "
                         "can supply at most %d" % (need, supply))
 
+        # Nurse-days over sliding windows. H5 caps a nurse at W - W//6 working
+        # days inside any window of W consecutive days, so a locally dense
+        # stretch can starve even when the whole-horizon totals are comfortable.
+        # Availability is capped per nurse too, via a prefix sum.
+        free_prefix = []
+        for i in range(N):
+            base = i * D
+            acc = [0] * (D + 1)
+            for d in range(D):
+                acc[d + 1] = acc[d] + (0 if self.on_leave[base + d] else 1)
+            free_prefix.append(acc)
+
+        for width in range(6, min(D, 12) + 1):
+            cap = width - width // 6
+            for lo in range(0, D - width + 1):
+                hi = lo + width
+                demand = sum(m + a + e - self.b_hi[d] for d in range(lo, hi))
+                if demand <= 0:
+                    continue
+                supply = 0
+                for i in range(N):
+                    acc = free_prefix[i]
+                    supply += min(cap, acc[hi] - acc[lo])
+                    if supply >= demand:
+                        break
+                if supply < demand:
+                    return ("days %d-%d need %d nurse-days but H5 and leave "
+                            "allow at most %d there"
+                            % (lo, hi - 1, demand, supply))
+
         # H8 in aggregate: the fixed workload must fit inside the nurses' budgets.
         if self.total_units > sum(self.capacity):
             return ("workload %d exceeds total nurse capacity %d"
@@ -240,14 +270,35 @@ class Instance:
     # ------------------------------------------------------------ part B --
 
     def cost_lower_bound(self):
-        """Least achievable Part B cost, ignoring the hard constraints.
+        """Greatest lower bound we can prove on the Part B cost.
 
-        Per nurse the cost floor is decided purely by the parity of their total
-        units t: 0 when t % 3 == 0, else 2 (verified by brute force in
-        dev/verify_bound.py). Since sum(t_i) = total_units is invariant, at most
+        Two independent arguments; the cost cannot beat either.
+
+        Column imbalance. Writing a nurse's totals as (x, y, z), the per-nurse
+        cost 3(x^2+y^2+z^2) - (x+y+z)^2 is identically (x-y)^2 + (y-z)^2 +
+        (z-x)^2. So a zero-cost nurse has x = y = z, and summing over all
+        nurses would force D*m = D*a = D*e -- cost 0 is possible only when
+        m == a == e. In general Cauchy-Schwarz on each column gives
+            sum_i (x_i - y_i)^2 >= (D(m-a))^2 / N
+        and likewise for the other two pairs. Writing u = x-y, v = y-z the
+        per-nurse cost is 2(u^2+uv+v^2), so the total is always even and the
+        bound rounds up to an even number.
+
+        Residue. Per nurse the floor is 0 when the total is a multiple of three
+        and 2 otherwise; since sum of totals is invariant at D(m+a+e), at most
         one nurse need be off a multiple of three.
+
+        This is a bound on the objective alone -- the hard constraints can only
+        push the true optimum higher -- so an early exit that fires on equality
+        is sound.
         """
-        return 0 if self.total_units % 3 == 0 else 2
+        m, a, e = self.m, self.a, self.e
+        spread = (m - a) ** 2 + (a - e) ** 2 + (e - m) ** 2
+        raw = self.D * self.D * spread
+        column = -(-raw // self.N)              # ceil
+        column += column % 2                    # the cost is always even
+        residue = 0 if self.total_units % 3 == 0 else 2
+        return max(column, residue)
 
 
 # ------------------------------------------------------------------ output --

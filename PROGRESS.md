@@ -96,33 +96,50 @@ Let `b_d` = number of `B` shifts on day `d`. Then the day needs exactly
 
 Once `b_d` is fixed, H4/H7 are just "pick disjoint sets of these sizes".
 
-### 2.3 Total workload is invariant, so Part B's optimum is computable
+### 2.3 Two independent lower bounds on the Part B cost
+
+**Column imbalance (the strong one).** The per-nurse cost has a much cleaner
+form than it first appears. Writing a nurse's totals as `(x, y, z)`:
 
 ```
-Σ_i (C_iM + C_iA + C_iE) = D · (m + a + e)      -- independent of every b_d
+3(x² + y² + z²) − (x + y + z)²  ≡  (x − y)² + (y − z)² + (z − x)²
 ```
 
-Given a nurse's total `t`, the cost floor depends only on `t mod 3`:
+(verified exhaustively). So a zero-cost nurse has `x = y = z`. Summing over all
+nurses would force `D·m = D·a = D·e` — **cost 0 is possible only when
+`m = a = e`.** In general, Cauchy–Schwarz on each column gives
 
-| `t mod 3` | best split | floor |
-|---|---|---|
-| 0 | `(k,k,k)` | **0** |
-| 1 | `(k+1,k,k)` | **2** |
-| 2 | `(k+1,k+1,k)` | **2** |
+```
+C  ≥  D²·[(m−a)² + (a−e)² + (e−m)²] / N          rounded up to an even number
+```
 
-Since `Σ t_i = S = D(m+a+e)` is fixed, at most one nurse need be off a multiple
-of three, so the **global lower bound is `0` if `S ≡ 0 (mod 3)`, else `2`.**
+(even because, with `u = x−y`, `v = y−z`, the per-nurse cost is `2(u²+uv+v²)`).
+Brute-force validated against exhaustive optima on small cases: zero violations.
 
-Verified by brute force over all total-vectors for `N=4, K=8, S = 0…16`
-(`dev/` scratch script) — the bound is exact, not merely valid.
+**Residue (the weak one).** Total workload is invariant:
+`Σ_i (C_iM + C_iA + C_iE) = D·(m + a + e)`, independent of every `b_d`. Given a
+nurse's total `t`, the floor is `0` if `t ≡ 0 (mod 3)` and `2` otherwise, so at
+most one nurse need be off a multiple of three — giving `0` or `2`.
 
-Sample instances: test1 → **0**, test2 → **2**, test3 → **0**.
+The bound used is the **maximum** of the two.
 
-> **Note on a tempting wrong turn.** "Distribute work evenly across nurses" is
-> *not* the right Part B objective. Cost depends on `t_i mod 3`, not on how
-> equal the `t_i` are. For `N=4, S=16`: totals `(4,4,4,4)` cost **8** (every
-> nurse off by one), while `(6,6,3,1)` or `(3,3,3,7)` cost **2**. Equalising is
-> 4× worse here. The target is *maximise the count of `t_i ≡ 0 (mod 3)`*.
+| instance | m,a,e | residue | column | used |
+|---|---|---|---|---|
+| test1 | 1,3,3 | 0 | **36** | 36 |
+| test2 | 3,1,4 | 2 | **6** | 6 |
+| test3 | 1,1,1 | 0 | 0 | 0 |
+
+> **Correction to an earlier version of this document.** It reported the
+> residue bound alone, claiming `0` for test1. That is valid but badly loose —
+> the column bound is strictly stronger on **48 of 60** generated instances.
+> The practical cost of the error would have been real: Part B's early exit
+> would have chased an unreachable `0` on test1 and burned the whole budget,
+> losing precisely the runtime tie-break the exit exists to win.
+
+> **A second tempting wrong turn.** "Distribute work evenly across nurses" is
+> *not* the right objective either. Cost depends on `t_i mod 3`, not on how
+> equal the `t_i` are. For `N=4, S=16`: totals `(4,4,4,4)` cost **8**, while
+> `(6,6,3,1)` or `(3,3,3,7)` cost **2**. Equalising is 4× worse.
 
 ### 2.4 The `B → E` pairing is free
 
@@ -190,7 +207,21 @@ units of `K`. For every window (widths 2…8, plus the whole horizon):
 instance (`Ns=1`, S days at 1, 2, 5, 8) passed the global test and failed the
 window test at days 1–2.
 
-### 3.4 Aggregate workload and nurse-days
+### 3.4 Nurse-days over sliding windows (H5 locally)
+
+H5 caps a nurse at `W − W//6` working days inside any window of `W`
+consecutive days. So for every window (widths 6…12):
+
+```
+Σ_{d in window} (m+a+e−b_hi[d])  ≤  Σ_i min( W − W//6 , non-leave days of i in window )
+```
+
+A locally dense stretch starves even when whole-horizon totals are comfortable.
+Confirmed on a synthetic case: 6 nurses, 6 general days, `m+a+e = 6`. Every
+nurse must rest once in the window, so supply is 30 nurse-days against a demand
+of 36 — invisible to any global count.
+
+### 3.5 Aggregate workload and nurse-days
 `D(m+a+e) ≤ Σ_i min(K, 2·max_work_days_i)`, and
 `Σ_d (m+a+e−b_hi[d]) ≤ Σ_i max_work_days_i`, where `max_work_days_i` is an
 exact DP over H5 and that nurse's leaves.
@@ -361,9 +392,9 @@ file with an `IndentationError`. It now `compile()`s the output.
 |---|---|
 | Sample instances, official verifier | **3/3 VALID**, ~0.04s each |
 | Generated set (60 instances) | **59 valid, 1 correctly empty**, 0 invalid, 0 timeouts |
-| Full sweep wall clock | **31s** (was 602s with 10 timeouts before the fixes) |
-| Slowest single solve | 7.2s |
-| Part A cost vs bound | 76366 vs 50 — Part A ignores the objective entirely |
+| Full sweep wall clock | **49s** (was 602s with 10 timeouts before the fixes) |
+| Slowest single solve | 16.6s (`tight_02`) — marginal against an 18s budget, comfortable at the graded `T` |
+| Part A cost vs bound | 76876 vs **51918** — Part A ignores the objective entirely |
 
 **Caveat on this evidence.** Every instance here is one we generated. 59/60
 says the solver is sound and fast on *our* distribution; it is not evidence
