@@ -1,6 +1,6 @@
 # COL333 Assignment 1 — Nurse Scheduling: Progress & Design Document
 
-**Status:** Part A complete and hardened. Part B not started.
+**Status:** Part A complete and hardened. Part B implemented, optimal on all three samples.
 **Deadline:** 17:00, Thu 3 Sep 2026. **Weighting:** Part A ≈ 80%, Part B ≈ 20%.
 
 This document is a self-contained record of the work so far, written so that a
@@ -121,7 +121,26 @@ Brute-force validated against exhaustive optima on small cases: zero violations.
 nurse's total `t`, the floor is `0` if `t ≡ 0 (mod 3)` and `2` otherwise, so at
 most one nurse need be off a multiple of three — giving `0` or `2`.
 
-The bound used is the **maximum** of the two.
+**Exact relaxation (the one that actually binds).** Keep only H4's column sums
+and H8's budget: every valid roster gives each nurse a triple `(x,y,z)` with
+`x+y+z ≤ K`, the three columns summing to `(Dm, Da, De)`. Minimising over all
+such assignments is a genuine relaxation, so its optimum bounds the real one —
+and unlike the analytic forms it **sees `K`**. Solved by DP, guarded by a state
+budget *and* a wall-clock cap (the profile count grows as `K³`, so state count
+alone badly under-predicts the work); too large an instance falls back.
+
+The bound used is the **maximum** of all three.
+
+| instance | residue | column | **exact** | achieved |
+|---|---|---|---|---|
+| test1 | 0 | 36 | **36** | 36 — optimal |
+| test2 | 2 | 6 | **24** | 24 — optimal |
+| test3 | 0 | 0 | **18** | 18 — optimal |
+
+`test3` shows why `K` matters: with `K = 2` no nurse can ever hold `(1,1,1)` —
+three units exceeds the budget — so every working nurse costs ≥ 2, and 18 units
+at ≤ 2 each needs ≥ 9 nurses. **18 is unbeatable**; the analytic bound of 0 was
+chasing a phantom.
 
 | instance | m,a,e | residue | column | used |
 |---|---|---|---|---|
@@ -402,6 +421,38 @@ about the graders'. The TAs said they would release test cases with expected
 times — those are the real signal.
 
 ---
+
+## 9a. Part B
+
+**Construction.** The Part A engine with `cost_aware` value ordering, biasing
+each slot toward whichever of M/A/E that nurse currently has least of, so local
+search starts near-balanced instead of climbing out of a hole.
+
+**Neighbourhood.** Same-day swaps. Exchanging two nurses' day-`d` shifts leaves
+the day's multiset untouched, so H4 and H7 hold *automatically*; only rows
+`d−1, d, d+1` need checking. Cost moves by an **O(1) delta** over the two
+nurses touched, via the squared-differences identity.
+
+**Acceptance.** Hill climbing with neutral moves accepted. Simulated annealing
+was implemented and compared head-to-head on every instance with a real gap —
+it **tied on all of them**, so the temperature machinery is not carried.
+
+**Early exit.** Stop the instant cost reaches the bound. This is what the exact
+relaxation buys: all three samples reach a *proven* optimum and stop —
+**test1 36 in 1.4s, test2 24 in 0.15s, test3 18 in 0.07s against a 90s
+budget** — winning the runtime tie-break rather than spending the budget.
+
+**Durability.** Every improvement is written atomically, so a kill leaves the
+best roster so far rather than nothing.
+
+**Across 48 generated instances at 1.2s each:** total cost 44986 against a
+total bound of 44108 — **2.0% above provable optimum**, 12 proved optimal, zero
+invalid. The graded `T` is 300s+, so this is a floor on what it will do.
+
+**Not built:** the B-split/merge move that changes `b_d`. Same-day swaps
+preserve `b_d`, so the search is confined to the constructed `b` vector. `b_d`
+is pinned to 1 on all three samples (`min(m,a)=1`), so it is a no-op there;
+it has scope on 30 of 63 instances. Deferred as the lowest-value item.
 
 ## 10. Remaining work
 
