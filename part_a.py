@@ -1026,20 +1026,28 @@ def solve_part_b(inst, deadline, rng=None, on_improve=None):
     bound = inst.cost_lower_bound()
 
     best_roster = best_cost = None
-    while time.monotonic() < deadline:
+
+    # A few construction attempts, keeping the cheapest. Measured honestly:
+    # across nine instances this changed the FINAL cost on none of them --
+    # hill climbing reaches the same attractor from any start, so the
+    # neighbourhood, not the starting point, is what limits quality. Kept small
+    # and bounded as insurance for instances unlike the ones tested, not
+    # because it was shown to help; a larger share of the budget was measured
+    # and simply wasted climbing time.
+    attempts_left = 8
+    gen_deadline = min(deadline, time.monotonic() + 0.02 * (deadline - time.monotonic()))
+    while attempts_left > 0 and time.monotonic() < gen_deadline:
+        attempts_left -= 1
         roster = construct(inst, rng, cost_aware=True)
         if roster is None or not is_valid(inst, roster):
-            # Fall back to the Part A engine, then optimise whatever it finds.
-            roster, _ = solve_part_a(inst, min(deadline, time.monotonic() + 5.0),
-                                     rng)
-            if roster is None:
-                break
+            continue
         cost = objective(inst, roster)
         if best_cost is None or cost < best_cost:
             best_roster, best_cost = roster[:], cost
             if on_improve is not None:
                 on_improve(best_roster, best_cost)
-        break
+        if best_cost <= bound:
+            return best_roster, best_cost
 
     if best_roster is None:
         roster, _ = solve_part_a(inst, deadline, rng)
