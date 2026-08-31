@@ -46,7 +46,12 @@ Lower is better; `C = 0` when every nurse's shifts are evenly split. `C` is alwa
 ├── verifier.py            # starter code — DO NOT MODIFY
 ├── visualizer.py          # starter code — DO NOT MODIFY
 ├── sample_test_cases/     # test1.csv, test2.csv, test3.csv
-├── my_tests/              # extra instances I generate for stress testing
+├── dev/                   # dev tooling — NOT submitted
+│   ├── core.py            # shared solver core, concatenated into both parts
+│   ├── gen_instances.py   # random instance generator
+│   ├── bench.py           # timed run + verify over a folder
+│   └── selftest.py        # cross-checks core.py against verifier.py
+├── my_tests/              # generated instances (gitignored, reproducible)
 ├── outputs/               # generated rosters (gitignored)
 ├── scripts/
 │   ├── make_submission.sh # builds submission.zip in the required shape
