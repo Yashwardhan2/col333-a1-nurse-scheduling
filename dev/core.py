@@ -126,12 +126,15 @@ class Instance:
             dp = nxt
         return max(dp)
 
-    def _max_alternating_days(self, i):
-        """Most days nurse i could take B: non-leave and never two in a row."""
+    def _max_alternating_days(self, i, lo=0, hi=None):
+        """Most days in [lo, hi) nurse i could take B: off leave, never two in
+        a row. Greedy earliest-first is optimal for an interval like this."""
+        if hi is None:
+            hi = self.D
         base = i * self.D
         count = 0
         prev = -2
-        for d in range(self.D):
+        for d in range(lo, hi):
             if not self.on_leave[base + d] and d != prev + 1:
                 count += 1
                 prev = d
@@ -170,25 +173,56 @@ class Instance:
                 return ("day %d needs %d distinct nurses but only %d are off leave"
                         % (d, workers, self.avail[d]))
 
-        # Morning succession. On any day after the first, everyone who worked a
-        # morning yesterday is blocked by H2 and everyone who worked an evening
-        # is blocked by H3. Those are m + e distinct nurses, so at most
-        # N - m - e can start a morning today.
-        if D >= 2 and 2 * m + e > N:
-            return ("2m + e = %d exceeds N = %d, so no day after the first can "
-                    "staff %d mornings" % (2 * m + e, N, m))
+        # Morning succession. Yesterday's m morning workers are blocked by H2
+        # and its e evening workers by H3, so today's m mornings must come from
+        # nurses outside that set of exactly m + e. The blocked set is drawn
+        # from yesterday's available pool, so the most of it that can dodge
+        # today's pool is |avail(d-1) \ avail(d)| -- everything beyond that must
+        # overlap and eats into today's morning-legal supply.
+        #
+        # The leave-free form of this is just 2m + e <= N; accounting for who is
+        # actually on leave each day makes it strictly sharper, and it is that
+        # sharper form which catches real instances.
+        if D >= 2:
+            pools = [set(i for i in range(N) if not self.on_leave[i * D + d])
+                     for d in range(D)]
+            for d in range(1, D):
+                escapable = len(pools[d - 1] - pools[d])
+                legal = len(pools[d]) - max(0, (m + e) - escapable)
+                if legal < m:
+                    return ("day %d can offer at most %d nurses with a legal "
+                            "morning but needs %d" % (d, legal, m))
 
-        # B capacity. Each surgical day needs at least b_lo B shifts, every B
-        # costs 2 units of K, and H2 stops one nurse taking B on consecutive
-        # days -- so B supply is far scarcer than raw headcount suggests.
-        b_needed = sum(max(self.b_lo[d], m + a + e - self.avail[d])
-                       for d in range(D) if self.surgical_day[d])
-        if b_needed:
-            b_supply = sum(min(self.K // 2, self._max_alternating_days(i))
-                           for i in range(self.Ns))
-            if b_needed > b_supply:
+        # B capacity, checked over sliding windows rather than globally.
+        # H2 stops a nurse taking B on consecutive days, so inside any window of
+        # L consecutive days one nurse can cover at most ceil(L/2) of its B
+        # shifts -- and every B costs 2 units of K on top. A whole-horizon count
+        # misses the local squeeze: a single surgical nurse facing two adjacent
+        # surgical days has ample budget overall yet cannot cover both.
+        b_req = [max(self.b_lo[d], m + a + e - self.avail[d])
+                 if self.surgical_day[d] else 0 for d in range(D)]
+        if any(b_req):
+            per_nurse_cap = self.K // 2
+            for width in range(2, min(D, 8) + 1):
+                for lo in range(0, D - width + 1):
+                    need = sum(b_req[lo:lo + width])
+                    if not need:
+                        continue
+                    supply = sum(
+                        min(per_nurse_cap, self._max_alternating_days(i, lo,
+                                                                     lo + width))
+                        for i in range(self.Ns))
+                    if need > supply:
+                        return ("days %d-%d need %d B shifts but the surgical "
+                                "nurses can supply at most %d there"
+                                % (lo, lo + width - 1, need, supply))
+            # Whole horizon too, which the bounded widths above do not cover.
+            need = sum(b_req)
+            supply = sum(min(per_nurse_cap, self._max_alternating_days(i, 0, D))
+                         for i in range(self.Ns))
+            if need > supply:
                 return ("surgical days need %d B shifts but the surgical nurses "
-                        "can supply at most %d" % (b_needed, b_supply))
+                        "can supply at most %d" % (need, supply))
 
         # H8 in aggregate: the fixed workload must fit inside the nurses' budgets.
         if self.total_units > sum(self.capacity):
@@ -388,152 +422,311 @@ def is_valid(inst, roster):
     return not violations(inst, roster)
 
 
-# ------------------------------------------------------- tier 1: construct --
+# ------------------------------------------------------------ day filling --
 
-# Which previous-day shifts block today's shift.
-#   H2  no morning (M or B) straight after a morning (M or B)
+# Which of yesterday's shifts block a morning (M or B) today:
+#   H2  no morning straight after a morning
 #   H3  no morning straight after an evening
 #   H6  only R or E may follow a B
 _BLOCKED_BEFORE_MORNING = (M, B, E)
 
 
-def construct(inst, rng, cost_aware=False):
-    """Build a roster one day at a time. Returns a roster, or None on dead end.
+def min_b(inst, d):
+    """Fewest B shifts day d can run with, or None if the day is impossible.
 
-    Each day is 'choose disjoint nurse sets of sizes b, m-b, a-b, e'. Within a
-    day the shift types are filled in MRV order -- tightest slack first -- and
-    each type's nurses are picked by an LCV-flavoured rule that spreads load, so
-    budgets and rest runs stay usable on later days.
+    Decision 5, option C: as few B shifts as H7 allows, raised only when the day
+    cannot otherwise field m + a + e - b distinct nurses.
+    """
+    if not inst.surgical_day[d]:
+        return 0
+    b = max(inst.b_lo[d], inst.m + inst.a + inst.e - inst.avail[d])
+    return b if b <= inst.b_hi[d] else None
 
-    Randomised tie-breaks make this worth restarting: the caller re-runs it with
-    a fresh rng until it succeeds or the deadline passes.
+
+def fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware=False):
+    """Pick who works day d, using exactly b surgical (B) shifts.
+
+    Returns {nurse: shift} covering everyone who works, or None if the day
+    cannot be staffed. Shift types are filled in MRV order -- least slack first,
+    recomputed after each type, since assigning one type shrinks the others'
+    pools. Nurses come from an LCV rule that keeps later days viable.
     """
     N, D, K, Ns = inst.N, inst.D, inst.K, inst.Ns
     m, a, e = inst.m, inst.a, inst.e
 
+    if b < inst.b_lo[d] or b > inst.b_hi[d] or m - b < 0 or a - b < 0:
+        return None
+
+    need = {}
+    if b:
+        need[B] = b
+    if m - b:
+        need[M] = m - b
+    if a - b:
+        need[A] = a - b
+    if e:
+        need[E] = e
+
+    # Off leave (H9), still inside budget (H8), not at five straight days (H5).
+    free = [i for i in range(N)
+            if not inst.on_leave[i * D + d] and units[i] < K and run[i] < 5]
+
+    used = [False] * N
+    chosen = {}
+    while need:
+        best_shift = best_slack = best_cands = None
+        for shift, want in need.items():
+            if shift == B:
+                cands = [i for i in free
+                         if not used[i] and i < Ns
+                         and last[i] not in _BLOCKED_BEFORE_MORNING
+                         and units[i] + 2 <= K]
+            elif shift == M:
+                cands = [i for i in free
+                         if not used[i]
+                         and last[i] not in _BLOCKED_BEFORE_MORNING]
+            elif shift == A:
+                cands = [i for i in free if not used[i] and last[i] != B]
+            else:                                   # E has no predecessor rule
+                cands = [i for i in free if not used[i]]
+
+            slack = len(cands) - want
+            if slack < 0:
+                return None
+            if best_slack is None or slack < best_slack:
+                best_shift, best_slack, best_cands = shift, slack, cands
+
+        # LCV. Lowest spend first keeps K budgets level so nobody exhausts early
+        # and shrinks a later day's pool; shortest run first defers forced rests;
+        # the jitter is what makes a restart explore somewhere new.
+        #
+        # M, B and E are the shifts that block a morning tomorrow (H2/H3), and
+        # tomorrow always needs exactly m nurses with a legal morning. So spend
+        # them first on nurses who cannot work tomorrow anyway -- blocking those
+        # costs nothing, while blocking an available nurse eats into a quota
+        # that is usually the binding one.
+        if best_shift == A:
+            blocks = None
+        else:
+            nxt = d + 1
+            if nxt < D:
+                blocks = [0 if inst.on_leave[i * D + nxt] else 1
+                          for i in range(N)]
+            else:
+                blocks = None
+
+        if cost_aware:
+            # Part B: prefer whoever is shortest on this shift type. A B shift
+            # adds a morning and an afternoon at once, so it reads both columns.
+            col = None if best_shift == B else (
+                2 if best_shift == E else (1 if best_shift == A else 0))
+
+            def key(i, col=col, blocks=blocks):
+                spent = cnt[i][0] + cnt[i][1] if col is None else cnt[i][col]
+                return (0 if blocks is None else blocks[i],
+                        spent, units[i], run[i], rng.random())
+            best_cands.sort(key=key)
+        else:
+            def key(i, blocks=blocks):
+                return (0 if blocks is None else blocks[i],
+                        units[i], run[i], rng.random())
+            best_cands.sort(key=key)
+
+        want = need.pop(best_shift)
+        for i in best_cands[:want]:
+            used[i] = True
+            chosen[i] = best_shift
+    return chosen
+
+
+def advance(inst, chosen, units, last, run, cnt):
+    """Per-nurse state after one day. Returns fresh lists, leaving inputs alone
+    so a backtracking caller can reuse the parent's state."""
+    N = inst.N
+    nunits, nrun = units[:], run[:]
+    nlast = [R] * N
+    ncnt = [c[:] for c in cnt]
+    for i in range(N):
+        shift = chosen.get(i, R)
+        nlast[i] = shift
+        if shift == R:
+            nrun[i] = 0                      # a rest clears the H5 run
+        else:
+            nrun[i] += 1
+            nunits[i] += SHIFT_UNITS[shift]
+            if shift == M:
+                ncnt[i][0] += 1
+            elif shift == A:
+                ncnt[i][1] += 1
+            elif shift == E:
+                ncnt[i][2] += 1
+            else:
+                ncnt[i][0] += 1
+                ncnt[i][1] += 1
+    return nunits, nlast, nrun, ncnt
+
+
+def forward_ok(inst, d, units, last, run):
+    """Forward check: can day d still be staffed from the current state?
+
+    Mornings are the binding resource -- M and B together always need exactly m
+    nurses whose previous shift permits a morning -- so this catches most dead
+    ends one day before the search walks into them.
+    """
+    if d >= inst.D:
+        return True
+    N, D, K, Ns = inst.N, inst.D, inst.K, inst.Ns
+    b = min_b(inst, d)
+    if b is None:
+        return False
+
+    workers = mornings = surgical_mornings = 0
+    for i in range(N):
+        if inst.on_leave[i * D + d] or units[i] >= K or run[i] >= 5:
+            continue
+        workers += 1
+        if last[i] not in _BLOCKED_BEFORE_MORNING:
+            mornings += 1
+            if i < Ns and units[i] + 2 <= K:
+                surgical_mornings += 1
+
+    if workers < inst.m + inst.a + inst.e - inst.b_hi[d]:
+        return False
+    if mornings < inst.m:
+        return False
+    return surgical_mornings >= b
+
+
+# ---------------------------------------------------- tier 1: construction --
+
+def construct(inst, rng, cost_aware=False):
+    """Greedy pass over the days. Returns a roster, or None on a dead end.
+
+    Randomised tie-breaks make restarting a search strategy in its own right:
+    each restart re-rolls the choices that led into the dead end.
+    """
+    N, D = inst.N, inst.D
     roster = [R] * (N * D)
-    units = [0] * N          # H8 spend so far (B costs 2)
-    last = [R] * N           # yesterday's shift, for H2/H3/H6
-    run = [0] * N            # consecutive working days ending yesterday, for H5
-    cnt = [[0, 0, 0] for _ in range(N)]   # per nurse: mornings, afternoons, evenings
+    units, last, run = [0] * N, [R] * N, [0] * N
+    cnt = [[0, 0, 0] for _ in range(N)]
 
     for d in range(D):
-        surgical = inst.surgical_day[d]
-        offset = d
-
-        # Decision 5, option C: as few B shifts as H7 allows, unless the day is
-        # too short-staffed to field m + a + e - b distinct nurses.
-        if surgical:
-            b = max(inst.b_lo[d], m + a + e - inst.avail[d])
-            if b > inst.b_hi[d]:
-                return None
-        else:
-            b = 0
-
-        need = {}
-        if b:
-            need[B] = b
-        if m - b:
-            need[M] = m - b
-        if a - b:
-            need[A] = a - b
-        if e:
-            need[E] = e
-        if m - b < 0 or a - b < 0:
+        b = min_b(inst, d)
+        if b is None:
             return None
-
-        # Nurses who may work at all today: off leave, under budget, and not
-        # already at five consecutive working days.
-        free = [i for i in range(N)
-                if not inst.on_leave[i * D + offset]
-                and units[i] < K and run[i] < 5]
-
-        used = [False] * N
-        while need:
-            # MRV over shift types: fill whichever has the least slack.
-            best_shift = best_slack = best_cands = None
-            for shift, want in need.items():
-                if shift == B:
-                    cands = [i for i in free
-                             if not used[i] and i < Ns
-                             and last[i] not in _BLOCKED_BEFORE_MORNING
-                             and units[i] + 2 <= K]
-                elif shift == M:
-                    cands = [i for i in free
-                             if not used[i]
-                             and last[i] not in _BLOCKED_BEFORE_MORNING]
-                elif shift == A:
-                    cands = [i for i in free if not used[i] and last[i] != B]
-                else:                                    # E is unrestricted
-                    cands = [i for i in free if not used[i]]
-
-                slack = len(cands) - want
-                if slack < 0:
-                    return None
-                if best_slack is None or slack < best_slack:
-                    best_shift, best_slack, best_cands = shift, slack, cands
-
-            # LCV: spend the nurses who constrain the future least. Lowest spend
-            # first keeps budgets level (so nobody hits K early and shrinks a
-            # later day's pool), shortest run first defers forced rests.
-            if cost_aware:
-                # Part B: also favour whoever is shortest on this shift type.
-                # A B shift adds a morning and an afternoon at once.
-                col = 2 if best_shift == E else (1 if best_shift == A else 0)
-                if best_shift == B:
-                    best_cands.sort(key=lambda i: (cnt[i][0] + cnt[i][1],
-                                                   units[i], run[i], rng.random()))
-                else:
-                    best_cands.sort(key=lambda i: (cnt[i][col], units[i],
-                                                   run[i], rng.random()))
-            else:
-                best_cands.sort(key=lambda i: (units[i], run[i], rng.random()))
-
-            want = need.pop(best_shift)
-            for i in best_cands[:want]:
-                used[i] = True
-                roster[i * D + offset] = best_shift
-
-        # Roll the per-nurse state forward. Everyone unassigned rests, which
-        # clears their run.
-        for i in range(N):
-            shift = roster[i * D + offset]
-            last[i] = shift
-            if shift == R:
-                run[i] = 0
-            else:
-                run[i] += 1
-                units[i] += SHIFT_UNITS[shift]
-                if shift == M:
-                    cnt[i][0] += 1
-                elif shift == A:
-                    cnt[i][1] += 1
-                elif shift == E:
-                    cnt[i][2] += 1
-                else:
-                    cnt[i][0] += 1
-                    cnt[i][1] += 1
+        chosen = fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware)
+        if chosen is None:
+            return None
+        for i, shift in chosen.items():
+            roster[i * D + d] = shift
+        units, last, run, cnt = advance(inst, chosen, units, last, run, cnt)
 
     return roster
 
 
-def solve_part_a(inst, deadline, rng=None):
-    """Find any valid roster. Returns (roster or None, attempts used).
+# ------------------------------------------------- tier 2: backtracking CSP --
 
-    Tier 1 is randomised, so restarting it is itself a search strategy: each
-    restart re-rolls the tie-breaks that led into the dead end. Part A is graded
-    on wall-clock time, so this returns the first roster that verifies.
+def solve_tier2(inst, deadline, rng, variants=3, node_budget=None,
+                cost_aware=False):
+    """Day-level backtracking for instances where restarts alone dead-end.
+
+    Depth is D, not N*D: one decision per day. Each node branches over b_d
+    (Decision 5, option D) and over a few randomised fillings of that day, with
+    forward checking on the next day pruning most dead ends a level early.
+
+    Aborting matters as much as searching here. A plain `return False` on the
+    deadline is indistinguishable from "this branch failed", so every ancestor
+    would dutifully try its remaining variants and unwinding would itself take
+    exponential time -- overrunning T and scoring zero. The `stop` flag makes
+    the abort unambiguous and collapses the stack immediately.
+
+    Not complete -- it samples `variants` fillings per b rather than enumerating
+    every partition of nurses into slots -- so a None result means "not found",
+    never "proved unsatisfiable". Only infeasibility_reason() proves that.
+    """
+    N, D = inst.N, inst.D
+    roster = [R] * (N * D)
+    state = {"nodes": 0, "stop": False}
+
+    def descend(d, units, last, run, cnt):
+        if state["stop"]:
+            return False
+        if d == D:
+            return True
+
+        state["nodes"] += 1
+        if not state["nodes"] & 31:
+            if time.monotonic() > deadline:
+                state["stop"] = True
+                return False
+        if node_budget is not None and state["nodes"] > node_budget:
+            state["stop"] = True
+            return False
+
+        low = min_b(inst, d)
+        if low is None:
+            return False
+        b_values = range(low, inst.b_hi[d] + 1) if inst.surgical_day[d] else (0,)
+
+        for b in b_values:
+            for _ in range(variants):
+                if state["stop"]:
+                    return False
+                chosen = fill_day(inst, d, b, units, last, run, cnt, rng,
+                                  cost_aware)
+                if chosen is None:
+                    continue            # randomised: another draw may staff it
+                nunits, nlast, nrun, ncnt = advance(
+                    inst, chosen, units, last, run, cnt)
+                if not forward_ok(inst, d + 1, nunits, nlast, nrun):
+                    continue
+                for i, shift in chosen.items():
+                    roster[i * D + d] = shift
+                if descend(d + 1, nunits, nlast, nrun, ncnt):
+                    return True
+                for i in chosen:                     # undo before the next try
+                    roster[i * D + d] = R
+        return False
+
+    start = ([0] * N, [R] * N, [0] * N, [[0, 0, 0] for _ in range(N)])
+    found = descend(0, *start)
+    return roster if found else None
+
+
+def solve_part_a(inst, deadline, rng=None):
+    """Find any valid roster. Returns (roster or None, attempts).
+
+    Tier 1 first: it settles most instances in milliseconds, and Part A is
+    graded on actual runtime, so the cheap path has to come first. Tier 2 takes
+    over the remaining budget for whatever survives.
     """
     if rng is None:
         rng = random.Random(0xC01333)
-
     if inst.infeasibility_reason() is not None:
         return None, 0
 
+    now = time.monotonic()
+    # Tier 1 resolves in milliseconds when it resolves at all, so its slice must
+    # be a small constant rather than a fraction of the budget: on a 300s
+    # instance a 25% share burned a minute of hopeless restarts before the real
+    # search got a look in.
+    tier1_until = min(deadline, now + min(3.0, 0.5 * (deadline - now)))
+
     attempts = 0
-    while time.monotonic() < deadline:
+    while time.monotonic() < tier1_until:
         attempts += 1
         roster = construct(inst, rng)
         if roster is not None and is_valid(inst, roster):
             return roster, attempts
+
+    budget_nodes = 2000
+    while time.monotonic() < deadline:
+        attempts += 1
+        roster = solve_tier2(inst, deadline, rng, node_budget=budget_nodes)
+        if roster is not None and is_valid(inst, roster):
+            return roster, attempts
+        # Exhausting the budget means this subtree was a bad bet, not that the
+        # instance is hopeless -- restart wider with a fresh set of tie-breaks.
+        budget_nodes *= 4
+
     return None, attempts

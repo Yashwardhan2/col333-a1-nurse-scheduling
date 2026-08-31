@@ -57,6 +57,45 @@ def make_instance(rng, N, D, tightness, leave_rate, surg_rate, T):
                     T=T, days=days, K=K, leaves=leaves)
 
 
+def make_tight_instance(rng, N, D, leave_rate, T):
+    """Build an instance where some day genuinely cannot run on b_d = 1.
+
+    The default generator keeps m + a + e within the thinnest day's headcount,
+    which silently guarantees b_d = 1 always fits -- so it never exercises the
+    demand-driven branch of min_b(). Here coverage is deliberately pushed past
+    the tightest day's availability, forcing b_d above 1 on at least one day.
+    """
+    # Mostly surgical: B supply is the scarce resource when b_d has to climb.
+    Ns = rng.randint(max(2, (2 * N) // 3), N)
+    days = "S" * D
+    leaves = "".join("L" if rng.random() < leave_rate else "W"
+                     for _ in range(N * D))
+
+    per_day = [sum(1 for i in range(N) if leaves[i * D + d] == "W")
+               for d in range(D)]
+    room = min(per_day)
+    if room < 5:
+        return None
+
+    # Overshoot the thinnest day by delta, so that day needs b_d >= delta.
+    delta = rng.randint(2, 4)
+    budget = room + delta
+    m = rng.randint(delta, max(delta, budget // 2))
+    a = rng.randint(delta, max(delta, budget - m - 1))
+    e = budget - m - a
+    if e < 1 or m < delta or a < delta:
+        return None
+    # Morning succession (2m + e <= N) is necessary; do not generate past it.
+    if 2 * m + e > N:
+        return None
+
+    workload = D * (m + a + e)
+    K = max(2, -(-workload // N) + rng.randint(1, 4))
+
+    return Instance(N=N, D=D, Ns=Ns, Ng=N - Ns, m=m, a=a, e=e,
+                    T=T, days=days, K=K, leaves=leaves)
+
+
 def to_csv(inst):
     header = "N,D,N_s,N_g,m,a,e,T,days,K,leaves"
     row = "%d,%d,%d,%d,%d,%d,%d,%g,%s,%d,%s" % (
@@ -86,6 +125,29 @@ def main():
     ]
 
     written = skipped = 0
+
+    # Tight tier: coverage exceeds the thinnest day, so b_d must exceed 1.
+    from core import min_b
+    for k in range(args.count):
+        inst = None
+        for _ in range(200):
+            cand = make_tight_instance(
+                rng, N=rng.randint(12, 50), D=rng.randint(6, 30),
+                leave_rate=rng.choice((0.05, 0.15, 0.3)), T=args.T)
+            if cand is None or cand.infeasibility_reason() is not None:
+                continue
+            # Keep it only if it actually forces b_d > 1 somewhere.
+            if any((min_b(cand, d) or 0) > 1 for d in range(cand.D)):
+                inst = cand
+                break
+        if inst is None:
+            skipped += 1
+            continue
+        with open(os.path.join(args.out, "tight_%02d.csv" % k), "w",
+                  encoding="utf-8") as f:
+            f.write(to_csv(inst))
+        written += 1
+
     for name, (nlo, nhi), (dlo, dhi) in tiers:
         for k in range(args.count):
             tightness = k / max(1, args.count - 1)
