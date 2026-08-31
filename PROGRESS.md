@@ -475,18 +475,40 @@ sanity run.
 
 ## 11. Questions a reviewer could usefully attack
 
-1. **Is the per-day morning-succession bound (§3.2) actually tight?** Is there
-   a sharper sound condition — e.g. one that also accounts for `K` exhaustion
-   or H5-forced rests interacting with the blocked set?
-2. **Tier 2 is incomplete by construction.** Is bounded-variant sampling with
-   restarts the right trade, or should there be a genuinely complete fallback
-   for small `N·D` where exhaustive search is affordable?
-3. **Is there a sound infeasibility condition we are still missing?** Every
-   instance our search failed on so far proved unsatisfiable, which suggests
-   the search is stronger than the current condition set.
-4. **Part B:** is there a constructive argument for when the mod-3 bound is
-   *achievable* subject to H1–H9, rather than merely a lower bound? That would
-   let us stop earlier and more often.
-5. **Does the swap neighbourhood connect the feasible space**, or are there
-   feasible rosters unreachable from a given start by same-day swaps alone?
-   If so, what additional move restores connectivity?
+**Resolved since the last revision** (kept so a reviewer does not re-derive them):
+
+- *Q1 morning-bound tightness* — accepted as sound but not strictly tight; the
+  dynamic form lives in `forward_ok`. No change.
+- *Q2 incompleteness* — accepted; bounded randomised restarts are the right
+  trade against heavy-tailed runtimes when the grader cuts at `T`.
+- *Q3 missing condition* — yes: sliding-window nurse-days (§3.4). Implemented.
+- *Q4 mod-3 achievability* — superseded. The residue bound was the wrong tool;
+  the exact column relaxation (§2.3) answers it directly and proves all three
+  samples optimal.
+- *Q5 swap connectivity* — confirmed: same-day swaps preserve `b_d`, so the
+  search is confined to the constructed `b` vector. The B-split/merge move is
+  the fix; deferred because it is a no-op on all three samples.
+
+**Still open:**
+
+1. **The exact relaxation only runs on small instances.** It is guarded by a
+   state budget and a 1.5s cap, and falls back to the analytic bound above
+   that — so on large instances we cannot tell an optimal roster from a merely
+   good one, and the early exit never fires. Is there a bound that is both
+   tight and cheap at `N=50, D=30`? An LP relaxation over profiles would do it,
+   but no LP solver is available (standard library only, no scipy).
+2. **How much does the B-split/merge move actually buy?** It has scope on 30 of
+   63 instances but is a no-op on all three samples. Is there an argument for
+   how far a fixed `b` vector can be from optimal, to decide whether this is
+   worth the implementation risk this close to the deadline?
+3. **Is same-day swapping with neutral moves the right neighbourhood at all?**
+   SA tied with hill climbing everywhere tested, which suggests the landscape
+   is not rugged but rather that the neighbourhood is *narrow*. Would a
+   3-cycle rotation (i→j→k→i on one day) reach places pairwise swaps cannot?
+4. **We are 2.0% above the provable bound in aggregate at 1.2s per instance.**
+   Where is that residue — a few instances far off, or a uniform small gap?
+   (Current data: `large_01` alone accounts for a gap of 198 of ~878 total.)
+5. **Is our tier-1/tier-2 split still right for Part B?** Part B calls the
+   cost-aware constructor once and then optimises. Would repeated cost-aware
+   restarts, keeping the best starting roster, beat spending all the time in
+   local search from a single start?
