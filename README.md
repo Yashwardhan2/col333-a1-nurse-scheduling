@@ -145,3 +145,4 @@ Where the handout is ambiguous, the verifier is the ground truth:
 Keep short dated entries here so `report.txt` is easy to write at the end.
 
 - `YYYY-MM-DD` — ...
+- 2026-08-31 — env: conda ai_a1, Python 3.10.21. Verifier prints [H2..H9] list once an output JSON exists.
