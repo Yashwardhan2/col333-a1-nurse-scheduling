@@ -1,0 +1,22 @@
+Yashwardhan Singh Choudhary, 2024CS10300
+
+[Replace everything below. Max 2 pages, 11pt Arial. Keep it dense and specific.]
+
+1. Problem formulation
+   - Variables, domains, and how B was modelled.
+   - Which hard constraints were enforced during search vs checked at the end.
+
+2. Part A algorithm
+   - Search strategy and why.
+   - Variable/value ordering heuristics used (MRV, degree, LCV, ...).
+   - Pruning: forward checking / arc consistency / counting arguments on m, a, e.
+   - Handling of the global-ish constraints (H4 daily exact cover, H5 window rest, H8 budget K).
+   - Restarts, randomisation, or repair steps, if any.
+
+3. Part B algorithm
+   - How the soft cost C is incorporated (value ordering bias, local search, repair moves).
+   - Anytime behaviour: what is returned when the time budget T runs out.
+
+4. Complexity and observations
+   - Where the search blows up and what fixed it.
+   - Empirical results on the sample instances (time, validity, cost for Part B).
