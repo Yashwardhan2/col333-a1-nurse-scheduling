@@ -299,7 +299,82 @@ class Instance:
         column = -(-raw // self.N)              # ceil
         column += column % 2                    # the cost is always even
         residue = 0 if self.total_units % 3 == 0 else 2
-        return max(column, residue)
+        bound = max(column, residue)
+
+        # When the relaxation is small enough to solve exactly it dominates
+        # both analytic forms, because it accounts for H8. A tighter bound only
+        # ever helps: too low merely means the early exit does not fire, and
+        # too high is impossible since this is a genuine relaxation.
+        exact = _relaxed_column_optimum(self.N, self.D * m, self.D * a,
+                                        self.D * e, self.K)
+        if exact is not None and exact > bound:
+            bound = exact
+        return bound
+
+
+def _relaxed_column_optimum(N, X, Y, Z, K, budget_states=120000,
+                            max_seconds=1.5):
+    """Exact minimum cost over per-nurse column totals.
+
+    Relaxes the roster to just its column sums: any valid roster gives each
+    nurse a triple (x, y, z) with x+y+z <= K (H8) and the three columns summing
+    to (D*m, D*a, D*e) (H4). Minimising over all such assignments therefore
+    bounds the real optimum from below, and it is far tighter than the
+    Cauchy-Schwarz form because it sees K.
+
+    On test3 this is the difference between a useless 0 and the true 18: with
+    K=2 no nurse can ever hold (1,1,1), so every working nurse costs at least 2.
+
+    Returns None when the relaxation is too large to finish, leaving the
+    caller on the analytic bound. Both a state budget and a wall-clock cap are
+    needed: the number of profiles grows as K^3, so state count alone badly
+    under-predicts the work.
+    """
+    if (X + 1) * (Y + 1) * (Z + 1) > budget_states:
+        return None
+    if (K + 1) * (K + 2) * (K + 3) // 6 > 2000:
+        return None
+    stop_at = time.monotonic() + max_seconds
+    total = X + Y + Z
+    if total == 0:
+        return 0
+    # More nurses than units is pointless: each extra covers nothing.
+    max_nurses = min(N, total)
+
+    profiles = []
+    for dx in range(min(K, X) + 1):
+        for dy in range(min(K - dx, Y) + 1):
+            for dz in range(min(K - dx - dy, Z) + 1):
+                if dx or dy or dz:
+                    profiles.append((dx, dy, dz,
+                                     (dx - dy) ** 2 + (dy - dz) ** 2 + (dz - dx) ** 2))
+    if not profiles:
+        return None
+
+    INF = float("inf")
+    cur = {(0, 0, 0): 0}
+    best = INF
+    target = (X, Y, Z)
+    for _ in range(max_nurses):
+        if time.monotonic() > stop_at:
+            return None
+        nxt = {}
+        for (x, y, z), c in cur.items():
+            for dx, dy, dz, pc in profiles:
+                nx, ny, nz = x + dx, y + dy, z + dz
+                if nx > X or ny > Y or nz > Z:
+                    continue
+                key = (nx, ny, nz)
+                nc = c + pc
+                if nxt.get(key, INF) > nc:
+                    nxt[key] = nc
+        if not nxt:
+            break
+        cur = nxt
+        hit = cur.get(target)
+        if hit is not None and hit < best:
+            best = hit
+    return None if best is INF else best
 
 
 # ------------------------------------------------------------------ output --
@@ -781,3 +856,201 @@ def solve_part_a(inst, deadline, rng=None):
         budget_nodes *= 4
 
     return None, attempts
+
+
+# --------------------------------------------------- part B: local search --
+
+def swap_ok(inst, roster, units, d, i, j):
+    """Can nurses i and j exchange their day-d shifts?
+
+    A same-day exchange leaves the day's multiset of shifts untouched, so H4
+    and H7 hold automatically and only the row constraints need checking --
+    and only at days d-1, d, d+1, since nothing else moved.
+    """
+    D = inst.D
+    u = roster[i * D + d]
+    v = roster[j * D + d]
+    if u == v:
+        return False
+    if (v == B and i >= inst.Ns) or (u == B and j >= inst.Ns):
+        return False                                            # H1
+    if (inst.on_leave[i * D + d] and v != R) or \
+       (inst.on_leave[j * D + d] and u != R):
+        return False                                            # H9
+    wu, wv = SHIFT_UNITS[u], SHIFT_UNITS[v]
+    if units[i] - wu + wv > inst.K or units[j] - wv + wu > inst.K:
+        return False                                            # H8
+
+    for nurse, shift in ((i, v), (j, u)):
+        base = nurse * D
+        prev = roster[base + d - 1] if d > 0 else R
+        nxt = roster[base + d + 1] if d < D - 1 else R
+        if shift in MORNING_SHIFTS and prev in (M, B, E):
+            return False                                        # H2, H3
+        if nxt in MORNING_SHIFTS and shift in (M, B, E):
+            return False                                        # H2, H3
+        if prev == B and shift not in (R, E):
+            return False                                        # H6
+        if shift == B and nxt not in (R, E):
+            return False                                        # H6
+
+    # H5 can only break when one side rests and the other does not: the run
+    # through day d is the only one that changed.
+    if (u == R) != (v == R):
+        for nurse, shift in ((i, v), (j, u)):
+            if shift == R:
+                continue                                # resting only splits runs
+            base = nurse * D
+            before = 0
+            for step in range(1, 6):
+                if d - step < 0 or roster[base + d - step] == R:
+                    break
+                before += 1
+            after = 0
+            for step in range(1, 6):
+                if d + step >= D or roster[base + d + step] == R:
+                    break
+                after += 1
+            if before + 1 + after > 5:
+                return False
+    return True
+
+
+def _nurse_cost(mornings, afternoons, evenings):
+    """Per-nurse cost via the squared-differences identity (see §2.3)."""
+    return ((mornings - afternoons) ** 2 + (afternoons - evenings) ** 2
+            + (evenings - mornings) ** 2)
+
+
+def _shift_delta(counts, shift, sign):
+    if shift == M:
+        counts[0] += sign
+    elif shift == A:
+        counts[1] += sign
+    elif shift == E:
+        counts[2] += sign
+    elif shift == B:
+        counts[0] += sign
+        counts[1] += sign
+
+
+def optimize(inst, roster, deadline, rng, bound=None, on_improve=None):
+    """Hill-climb the soft cost over the same-day swap neighbourhood.
+
+    Neutral moves are accepted so the search can drift across plateaus. Cost is
+    updated by an O(1) delta over the two nurses touched, never recomputed.
+
+    Simulated annealing was measured against this and tied on every instance
+    tried, so the extra temperature machinery is not carried.
+    """
+    D, N = inst.D, inst.N
+    if bound is None:
+        bound = inst.cost_lower_bound()
+
+    counts = [list(t) for t in shift_totals(inst, roster)]
+    units = [sum(SHIFT_UNITS[roster[i * D + d]] for d in range(D))
+             for i in range(N)]
+    cost = objective(inst, roster)
+
+    # Sampling only from nurses who actually hold a shift avoids the rest/rest
+    # draws, which are the large majority when few nurses work each day.
+    workers = [[i for i in range(N) if roster[i * D + d] != R] for d in range(D)]
+
+    best_cost, best_roster = cost, roster[:]
+    if on_improve is not None:
+        on_improve(best_roster, best_cost)
+
+    checks = 0
+    while cost > bound:
+        checks += 1
+        if not checks & 255 and time.monotonic() > deadline:
+            break
+
+        d = rng.randrange(D)
+        pool = workers[d]
+        if not pool:
+            continue
+        i = pool[rng.randrange(len(pool))]
+        j = rng.randrange(N)
+        if i == j:
+            continue
+        u = roster[i * D + d]
+        v = roster[j * D + d]
+        if u == v:
+            continue
+
+        ci, cj = counts[i], counts[j]
+        before = _nurse_cost(*ci) + _nurse_cost(*cj)
+        _shift_delta(ci, u, -1)
+        _shift_delta(ci, v, 1)
+        _shift_delta(cj, v, -1)
+        _shift_delta(cj, u, 1)
+        delta = _nurse_cost(*ci) + _nurse_cost(*cj) - before
+
+        if delta <= 0 and swap_ok(inst, roster, units, d, i, j):
+            roster[i * D + d] = v
+            roster[j * D + d] = u
+            units[i] += SHIFT_UNITS[v] - SHIFT_UNITS[u]
+            units[j] += SHIFT_UNITS[u] - SHIFT_UNITS[v]
+            if (u == R) != (v == R):
+                if v == R:
+                    pool.remove(i)
+                    pool.append(j)
+                else:
+                    pool.remove(j)
+                    pool.append(i)
+            cost += delta
+            if cost < best_cost:
+                best_cost, best_roster = cost, roster[:]
+                if on_improve is not None:
+                    on_improve(best_roster, best_cost)
+        else:
+            _shift_delta(ci, v, -1)
+            _shift_delta(ci, u, 1)
+            _shift_delta(cj, u, -1)
+            _shift_delta(cj, v, 1)
+
+    return best_roster, best_cost
+
+
+def solve_part_b(inst, deadline, rng=None, on_improve=None):
+    """Find a low-cost valid roster. Returns (roster or None, cost).
+
+    Cost-aware construction first, so local search starts near-balanced rather
+    than climbing out of a hole, then swaps until the deadline or the bound.
+    """
+    if rng is None:
+        rng = random.Random(0xC01333)
+    if inst.infeasibility_reason() is not None:
+        return None, 0
+
+    bound = inst.cost_lower_bound()
+
+    best_roster = best_cost = None
+    while time.monotonic() < deadline:
+        roster = construct(inst, rng, cost_aware=True)
+        if roster is None or not is_valid(inst, roster):
+            # Fall back to the Part A engine, then optimise whatever it finds.
+            roster, _ = solve_part_a(inst, min(deadline, time.monotonic() + 5.0),
+                                     rng)
+            if roster is None:
+                break
+        cost = objective(inst, roster)
+        if best_cost is None or cost < best_cost:
+            best_roster, best_cost = roster[:], cost
+            if on_improve is not None:
+                on_improve(best_roster, best_cost)
+        break
+
+    if best_roster is None:
+        roster, _ = solve_part_a(inst, deadline, rng)
+        if roster is None:
+            return None, 0
+        best_roster, best_cost = roster, objective(inst, roster)
+        if on_improve is not None:
+            on_improve(best_roster, best_cost)
+
+    if best_cost > bound:
+        best_roster, best_cost = optimize(inst, best_roster, deadline, rng,
+                                          bound=bound, on_improve=on_improve)
+    return best_roster, best_cost
