@@ -563,6 +563,73 @@ dropping outright ("the ROI isn't worth the risk"). Choosing the policy at
 construction time captures most of the benefit without the mid-search
 constraint risk that warning was about.
 
+## 9d. Round 4 — auditing an all-clear review
+
+An external reviewer audited the post-checker submission and returned an
+unqualified pass: *"There are no vulnerabilities here. Do not touch a single
+line of this code."* That verdict was itself treated as a claim to test. It was
+wrong, and the bug it missed could have scored zero on an instance.
+
+### The bug: the relaxation DP's time cap did not hold
+
+`_relaxed_column_optimum` checked its 1.5s cap once per **nurse iteration**, but
+a single pass over a large state set takes seconds by itself. On
+`suite_001/test635` the bound took **4.86s against a 1.5s cap** — a 3× overrun.
+
+Why that is severe rather than merely wasteful: the bound is computed *inside*
+Part B's budget, and suite_001 carries `T` values as low as **3s** (budget
+2.7s). A slow bound on a small-`T` instance overruns `T` outright, so the
+process is killed and the instance scores zero — not "spends its budget badly".
+
+Fixed twice over: the clock is now read every 256 states, holding the cap to
+about 3%; and Part B caps the bound at a fifth of its remaining budget, so a
+slow relaxation degrades to the analytic form rather than starving the search.
+
+| | before | after |
+|---|---|---|
+| `test635` bound | 4.86s | **1.55s** |
+| `test635` end-to-end at `T=3` | at risk of overrunning | **2.75–2.77s**, valid (3s limit) |
+| bounds returned | — | unchanged (76, 0, 56) |
+
+### Duplicate candidates — real, but not a regression
+
+On **17 of 27** instances, including all three samples, the `"min"` and `"max"`
+b-policies produce an *identical* b-vector, so Part B optimises two equivalent
+candidates on half the budget each. Measured across eight instances: **no cost
+difference**, because hill climbing converges well inside half the budget —
+the same convergence behaviour four earlier experiments found. So this is
+wasted work, not lost quality. Recorded rather than fixed, because the fix
+would trade a known-neutral inefficiency for fresh risk days before a deadline.
+
+### Degenerate inputs
+
+Twelve constructed edge cases — zero demand, `D=1`, `N=1`, `K=0`, no surgical
+nurses, all-leave, `D=5`, huge `K`, evening-only, morning-only-on-S. All run
+cleanly with no crashes. **Every empty output is a proved infeasibility with a
+correct stated reason**, never a give-up. Zero demand on all-general days
+correctly yields a valid all-rest roster (`VALID 0`), while zero demand with any
+surgical day is correctly rejected — H7 needs a `B` that `m = a = 0` cannot
+supply.
+
+### What the review got right, and what it overstated
+
+**Right, and confirmed:** the `held_back` LCV key is structurally incapable of
+creating false infeasibilities (it is a preference over a sorted list, so every
+candidate stays reachable). The `D = 1` optimality argument is sound. The time
+partition strands nothing — measured at 5.46s used of a 5.4s budget.
+
+**Overstated:** it called `(K − units[i]) // 2` the *exact* B capacity of the
+surgical pool. It is not — it ignores H2's alternation and ignores whether those
+nurses are on leave, so it over-estimates and the trigger fires *less* often
+than ideal. Harmless, but the reasoning behind the endorsement was wrong.
+
+**Missed:** both the DP guard bug and the duplicate candidates, the latter in
+code it specifically praised as "flawless".
+
+The transferable lesson: a review that finds nothing is not evidence that
+nothing is wrong. This one audited what the code *says* it does. The bug was in
+whether a guard actually *held* under load, which only measurement reveals.
+
 ## 10. Remaining work
 
 **Done since the last revision:** `report.txt` written (984 words, ~1.9 pages),
