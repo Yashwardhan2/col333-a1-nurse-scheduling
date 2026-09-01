@@ -279,7 +279,7 @@ class Instance:
 
     # ------------------------------------------------------------ part B --
 
-    def cost_lower_bound(self):
+    def cost_lower_bound(self, deadline=None):
         """Greatest lower bound we can prove on the Part B cost.
 
         Two independent arguments; the cost cannot beat either.
@@ -315,14 +315,14 @@ class Instance:
         # ever helps: too low merely means the early exit does not fire, and
         # too high is impossible since this is a genuine relaxation.
         exact = _relaxed_column_optimum(self.N, self.D * m, self.D * a,
-                                        self.D * e, self.K)
+                                        self.D * e, self.K, deadline=deadline)
         if exact is not None and exact > bound:
             bound = exact
         return bound
 
 
 def _relaxed_column_optimum(N, X, Y, Z, K, budget_states=120000,
-                            max_seconds=1.5):
+                            max_seconds=1.5, deadline=None):
     """Exact minimum cost over per-nurse column totals.
 
     Relaxes the roster to just its column sums: any valid roster gives each
@@ -344,6 +344,8 @@ def _relaxed_column_optimum(N, X, Y, Z, K, budget_states=120000,
     if (K + 1) * (K + 2) * (K + 3) // 6 > 2000:
         return None
     stop_at = time.monotonic() + max_seconds
+    if deadline is not None and deadline < stop_at:
+        stop_at = deadline
     total = X + Y + Z
     if total == 0:
         return 0
@@ -368,7 +370,15 @@ def _relaxed_column_optimum(N, X, Y, Z, K, budget_states=120000,
         if time.monotonic() > stop_at:
             return None
         nxt = {}
+        # The clock has to be read inside this loop, not just once per nurse:
+        # a single pass over a large state set can take seconds on its own, so
+        # an outer-loop-only check let one instance run 4.86s against a 1.5s
+        # cap. On a small-T instance that overruns the whole budget.
+        seen = 0
         for (x, y, z), c in cur.items():
+            seen += 1
+            if not seen & 255 and time.monotonic() > stop_at:
+                return None
             for dx, dy, dz, pc in profiles:
                 nx, ny, nz = x + dx, y + dy, z + dz
                 if nx > X or ny > Y or nz > Z:
@@ -1062,7 +1072,12 @@ def solve_part_b(inst, deadline, rng=None, on_improve=None):
     if inst.infeasibility_reason() is not None:
         return None, 0
 
-    bound = inst.cost_lower_bound()
+    # The relaxation DP is worth a lot -- it is what makes the early exit fire
+    # -- but it must never eat the budget it is meant to save. Cap it at a
+    # fifth of what is left, so a slow bound degrades to the analytic form
+    # instead of starving the search or overrunning T.
+    now = time.monotonic()
+    bound = inst.cost_lower_bound(deadline=now + 0.2 * (deadline - now))
 
     best_roster = best_cost = None
 
