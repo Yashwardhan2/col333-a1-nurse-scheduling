@@ -31,7 +31,14 @@ ai_a1/
 .DS_Store
 Thumbs.db
 
+# ---- Generated test instances (reproducible: dev/gen_instances.py --seed 333) ----
+my_tests/
+
 # ---- Logs / scratch ----
 *.log
 scratch/
 tmp/
+
+# ---- external checker (cloned, not ours) ----
+checker/
+check_subset/

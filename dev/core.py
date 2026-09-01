@@ -1,8 +1,9 @@
-"""COL333 Assignment 1 -- Part A
+"""Shared solver core for COL333 A1 (nurse rostering).
 
-GENERATED FILE. Edit dev/core.py or dev/driver_a.py and re-run dev/build.py.
-Standard library only; self-contained by design.
+This module is concatenated verbatim into part_a.py and part_b.py by dev/build.py,
+so it must stay standard-library only and must not define a __main__ block.
 """
+
 import csv
 import json
 import os
@@ -1142,21 +1143,3 @@ def solve_part_b(inst, deadline, rng=None, on_improve=None):
         best_roster, best_cost = optimize(inst, best_roster, deadline, rng,
                                           bound=bound, on_improve=on_improve)
     return best_roster, best_cost
-
-# ------------------------------------------------------------ entry point --
-
-if __name__ == "__main__":
-    instance = parse_input(sys.argv[1])
-    output_path = sys.argv[2]
-
-    # T is enforced per instance, so leave a margin for interpreter start-up
-    # and the final write. Part A is scored on actual runtime, not on budget
-    # used, so this is only a ceiling -- solve_part_a returns the moment a
-    # roster verifies.
-    budget = max(1.0, 0.9 * instance.T)
-    roster, _ = solve_part_a(instance, deadline=time.monotonic() + budget)
-
-    if roster is None:
-        write_solution(output_path, {})
-    else:
-        write_solution(output_path, roster_to_dict(instance, roster))

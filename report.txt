@@ -1,22 +1,96 @@
 Yashwardhan Singh Choudhary, 2024CS10300
 
-[Replace everything below. Max 2 pages, 11pt Arial. Keep it dense and specific.]
+1. PROBLEM FORMULATION
 
-1. Problem formulation
-   - Variables, domains, and how B was modelled.
-   - Which hard constraints were enforced during search vs checked at the end.
+The roster is modelled as a CSP with N*D variables, one per (nurse, day), over
+the domain {M, A, E, R, B}. The constraints split cleanly along two axes: H2,
+H3, H5, H6, H8 and H9 constrain a single nurse's row, while H4 and H7 constrain
+a single day's column. Nothing else couples them, and both algorithms below are
+built on that separation.
 
-2. Part A algorithm
-   - Search strategy and why.
-   - Variable/value ordering heuristics used (MRV, degree, LCV, ...).
-   - Pruning: forward checking / arc consistency / counting arguments on m, a, e.
-   - Handling of the global-ish constraints (H4 daily exact cover, H5 window rest, H8 budget K).
-   - Restarts, randomisation, or repair steps, if any.
+Letting b_d be the number of B shifts on day d, the column constraints collapse
+to one integer per day: the day needs exactly m-b_d nurses on M, a-b_d on A, e
+on E and b_d on B, consuming m+a+e-b_d distinct nurses. H4 and H7 are then just
+"choose disjoint sets of these sizes". We take b_d as small as H7 allows,
+raising it only when a day cannot field m+a+e-b_d distinct nurses, because each
+B costs two units of K and forces R or E the next day (H6).
 
-3. Part B algorithm
-   - How the soft cost C is incorporated (value ordering bias, local search, repair moves).
-   - Anytime behaviour: what is returned when the time budget T runs out.
+Two consequences are used throughout. First, total workload is invariant:
+sum over nurses of (C_M + C_A + C_E) = D*(m+a+e), whatever the b_d. Second,
+exchanging two nurses' shifts on one day leaves that day's multiset of shifts
+unchanged, so H4 and H7 are preserved automatically.
 
-4. Complexity and observations
-   - Where the search blows up and what fixed it.
-   - Empirical results on the sample instances (time, validity, cost for Part B).
+2. PART A
+
+Since Part A is graded on actual runtime, the solver is layered so the cheap
+path runs first.
+
+Pre-search pruning. Six sound necessary conditions reject unsatisfiable
+instances immediately, each verified to admit no false positives. The two that
+matter most: (i) morning succession -- on any day after the first, the m nurses
+who worked a morning are barred by H2 and the e on evenings by H3, so today's m
+mornings must come from outside a set of m+e, sharpened per day by how much of
+that set can be absorbed by leave; (ii) B capacity over sliding windows -- H2
+prevents B on consecutive days, so within W days one nurse covers at most
+ceil(W/2) of them, which catches a lone surgical nurse facing two adjacent
+surgical days however large K is. A per-nurse DP over H5 and leaves gives an
+exact bound on workable days, used for the aggregate checks.
+
+Tier 1: constructive. One randomised greedy pass over days. Within a day the
+shift types are filled in MRV order -- least slack (eligible nurses minus slots
+needed) first, recomputed after each type since filling one shrinks the others'
+pools. Nurses are chosen by an LCV rule with three keys. The first is the
+important one: M, B and E are exactly the shifts that bar a morning tomorrow,
+and tomorrow always needs m legal mornings, so those shifts go first to nurses
+who cannot work tomorrow anyway -- blocking them costs nothing. The remaining
+keys prefer the least-spent nurse (keeping K budgets level so nobody exhausts
+early and shrinks a later day's pool) and the shortest working run (deferring
+H5-forced rests). Randomised tie-breaks make restarting a search strategy.
+
+Tier 2: backtracking. If restarts dead-end, a depth-D search runs, one decision
+per day rather than per cell. Each node branches over b_d and over a few
+randomised fillings of that day. Forward checking on day d+1 prunes most dead
+ends a level early by verifying it retains enough workers, enough nurses with a
+legal morning, and enough surgical nurses for its B quota. Bounded randomised
+restarts with a geometrically growing node budget counter heavy-tailed runtimes,
+since one bad subtree can otherwise absorb the whole budget.
+
+3. PART B
+
+The objective simplifies: 3(x^2+y^2+z^2) - (x+y+z)^2 is identically
+(x-y)^2 + (y-z)^2 + (z-x)^2. So a zero-cost nurse has x=y=z, and summing over
+nurses forces D*m = D*a = D*e -- cost 0 is attainable only when m = a = e.
+
+Lower bound. Three bounds are computed and the largest taken: Cauchy-Schwarz on
+each column, giving C >= D^2[(m-a)^2+(a-e)^2+(e-m)^2]/N; a residue bound from
+each nurse's total mod 3; and, where the state space permits, an exact DP over
+the relaxation that keeps only H4's column sums and H8's budget. The third
+dominates because it sees K: on test3, K=2 means no nurse can ever hold (1,1,1),
+so every working nurse costs at least 2 and 18 units need at least 9 of them --
+the true optimum is 18, where the analytic bounds suggest 0.
+
+Search. A cost-aware variant of Tier 1 biases each slot toward whichever of
+M/A/E that nurse currently has least of, then hill climbing runs over the
+same-day swap neighbourhood, which preserves H4 and H7 by construction and needs
+only rows d-1, d, d+1 rechecked. Cost is updated by an O(1) delta over the two
+nurses touched. Neutral moves are accepted so the search crosses plateaus. The
+search stops the moment cost reaches the bound, which on all three sample
+instances happens in under two seconds with a proven optimum. Simulated
+annealing was implemented and compared head to head; it tied everywhere tested,
+so the temperature schedule was dropped rather than carried unused.
+
+4. RESULTS AND OBSERVATIONS
+
+All three samples are solved and verified: Part A in about 0.05s each, Part B at
+the proven optimum (36, 24, 18) in 1.6s, 0.15s and 0.08s. On 60 self-generated
+instances up to N=50, D=30, Part A returns a valid roster on every satisfiable
+one, with the single failure proved unsatisfiable, and Part B lands 2% above the
+provable bound in aggregate at only 1.2s per instance.
+
+Two things dominated the effort. Deadline handling: an early version treated a
+timeout return as an ordinary branch failure, so unwinding the tree was itself
+exponential and a 5s deadline overran to 100s -- fatal under an enforced T. And
+diagnosis: every instance the search could not crack turned out to be
+unsatisfiable, so the productive work was proving infeasibility rather than
+strengthening search. The known remaining limitation is that same-day swaps
+preserve b_d, so Part B's local search is confined to the constructed b vector.
