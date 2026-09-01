@@ -515,6 +515,54 @@ Part B at the proven optimum on all three. Imports are `csv`, `json`, `os`,
 `random`, `sys`, `time` only; zero occurrences of `subprocess`, `threading` or
 `multiprocessing`. `report.txt` is 984 words, ≈1.9 pages at 11pt.
 
+## 9c. External checker validation (AbhinavPJ/COL333-A1-CHECKER)
+
+1034 instances across four suites, with reference solutions and the assignment's
+own verifier. Run on the submitted files.
+
+**Part A: 1034/1034 correct.** The checker reports 1032/1034; both reported
+failures are errors in its reference solutions, not ours:
+
+| case | checker's reference | ours | official starter verifier |
+|---|---|---|---|
+| `suite_003/test8` | `{}` (infeasible) | 54-key roster | **VALID 42** |
+| `suite_004/test1` | `{}` (infeasible) | 1500-key roster | **VALID 664** |
+
+`suite_003/test8` is feasible by counting: workload `6·3 = 18` units against
+capacity `9 · K=2 = 18`, exactly tight. The checker's own verifier accepts both
+rosters — that is where its printed objective comes from — and it marks them
+FAIL only because `compare()` sees an empty reference.
+
+Of the 1000 instances in suite_001, **300 have empty references and we agree on
+every one**, each resolved in about 0.1s by the infeasibility conditions in §3
+rather than by exhausting the budget.
+
+**Part B: 158 of a 260-case sample** before the run was cut short: 151 MATCHED,
+2 MORE_OPTIMAL, 5 SUBOPTIMAL, 0 FAIL.
+
+### Two solver fixes this found
+
+**B-budget starvation.** One instance had 2 surgical nurses covering 15 surgical
+days, each B costing 2 units against K=16 — 16 units of capacity for 15 B
+shifts. The LCV rule prefers the least-spent nurse for every shift, so it gave
+ordinary work to surgical nurses early and burned the budget B duty needed;
+greedy died on day 28 of 30 in 397 of 400 trials. `fill_day` now holds surgical
+nurses back from non-B shifts when the remaining B demand nearly exhausts their
+budget. That case went from a 9.04s timeout to a pass in 0.045s.
+
+**The B-per-day policy is a cost decision, not only a feasibility one.** Four of
+the five suboptimal Part B cases had `D` of 1 or 2. On a one-day horizon every
+working nurse costs exactly 2 — even `B` gives `(1,1,0)` — so cost is
+`2(m+a+e−b)` and *maximising* `b` is the whole objective. `min_b` is right for
+Part A and backwards for Part B here, so `construct` gained a `b_policy` and
+Part B builds under both, climbs from each, and keeps the winner. Three of those
+cases then matched the reference exactly, one went 6 → 0, one 20 → 16.
+
+This is the item deferred in §10 and the one an external reviewer advised
+dropping outright ("the ROI isn't worth the risk"). Choosing the policy at
+construction time captures most of the benefit without the mid-search
+constraint risk that warning was about.
+
 ## 10. Remaining work
 
 **Done since the last revision:** `report.txt` written (984 words, ~1.9 pages),
