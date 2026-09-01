@@ -1,6 +1,7 @@
 # COL333 Assignment 1 — Nurse Scheduling: Progress & Design Document
 
-**Status:** Part A complete and hardened. Part B implemented, optimal on all three samples.
+**Status:** Complete and submittable. Part A hardened; Part B optimal on all three
+samples; `report.txt` written; `submission.zip` verified end to end.
 **Deadline:** 17:00, Thu 3 Sep 2026. **Weighting:** Part A ≈ 80%, Part B ≈ 20%.
 
 This document is a self-contained record of the work so far, written so that a
@@ -141,12 +142,6 @@ The bound used is the **maximum** of all three.
 three units exceeds the budget — so every working nurse costs ≥ 2, and 18 units
 at ≤ 2 each needs ≥ 9 nurses. **18 is unbeatable**; the analytic bound of 0 was
 chasing a phantom.
-
-| instance | m,a,e | residue | column | used |
-|---|---|---|---|---|
-| test1 | 1,3,3 | 0 | **36** | 36 |
-| test2 | 3,1,4 | 2 | **6** | 6 |
-| test3 | 1,1,1 | 0 | 0 | 0 |
 
 > **Correction to an earlier version of this document.** It reported the
 > residue bound alone, claiming `0` for test1. That is valid but badly loose —
@@ -454,24 +449,86 @@ preserve `b_d`, so the search is confined to the constructed `b` vector. `b_d`
 is pinned to 1 on all three samples (`min(m,a)=1`), so it is a no-op there;
 it has scope on 30 of 63 instances. Deferred as the lowest-value item.
 
+## 9b. Changes after external review (round 2)
+
+An external reviewer read the whole codebase. One finding was real; the fix it
+proposed was not. Everything below was measured before being adopted.
+
+### The bug: only one roster was ever constructed
+
+`solve_part_b` had a `while` loop ending in an unconditional `break` — an `if`
+in disguise. Confirmed and fixed.
+
+### The proposed fix does not work, and the data says why
+
+The reviewer's remedy was multi-start: spend 10% of the budget on repeated
+cost-aware constructions and hill-climb from the cheapest. Given identical total
+budgets across nine instances:
+
+| strategy | total gap over bound |
+|---|---|
+| single start (what we had) | 298 |
+| multi-start (proposed) | **298** |
+| restart on stagnation | **298** |
+| iterated, fixed time slices | **worse** |
+
+Identical on every instance. The diagnostic explains it: twenty cost-aware
+constructions of `large_01` span initial costs **1592–1664**, yet every hill
+climb from them lands on exactly **1452**. Same on `large_00` (568–594 → all
+498). Convergence *speed* was checked separately — also no difference.
+
+**Hill climbing reaches the same attractor from any start, so the neighbourhood
+— not the starting point — is what limits quality.** This is the second
+independent signal pointing there; simulated annealing tying with hill climbing
+was the first.
+
+The dead loop was still replaced, with a *bounded* multi-start (8 attempts,
+capped at 2% of the budget) — kept as insurance for instances unlike those
+tested, and commented as such, not because it was shown to help.
+
+### Corrections to the reviewer's report draft
+
+Its structure was sound and its vocabulary right, but four claims did not match
+the implementation:
+
+| draft | actual |
+|---|---|
+| "four sound infeasibility conditions" | **six** |
+| tier 2 "branches on daily shift permutations" | branches on `b_d` and randomised day fillings |
+| "Late Acceptance / flat Hill Climbing" | plain hill climbing with neutral moves |
+| "DP over valid column permutations" | DP over per-nurse column triples |
+
+Also rejected: its diagnosis that `large_01`'s gap comes from tier 1 locking
+into a tight H5 corner. Every start converges to 1452, so it is not a
+bad-start artifact.
+
+### Submission verification
+
+`submission.zip` unzipped in isolation, with nothing else present:
+
+| | test1 | test2 | test3 |
+|---|---|---|---|
+| Part A | VALID 168 | VALID 58 | VALID 38 |
+| Part B | **VALID 36** | **VALID 24** | **VALID 18** |
+
+Part B at the proven optimum on all three. Imports are `csv`, `json`, `os`,
+`random`, `sys`, `time` only; zero occurrences of `subprocess`, `threading` or
+`multiprocessing`. `report.txt` is 984 words, ≈1.9 pages at 11pt.
+
 ## 10. Remaining work
 
-**Part B (not started).** Plan:
-1. Reuse the Part A engine with `cost_aware=True` value ordering, biasing
-   toward whichever of M/A/E each nurse currently has least of, so the first
-   roster is already near-balanced.
-2. Local search over the same-day swap neighbourhood (§2.1) — provably cannot
-   break H4 or H7. Simulated annealing or min-conflicts on `C`.
-3. Target `t_i ≡ 0 (mod 3)` per nurse (**not** equal `t_i` — see §2.3), and
-   exploit the `B→E→R` pattern for surgical nurses.
-4. **Early exit at the computed bound** (`0` or `2`), which often *proves*
-   optimality rather than annealing to the deadline — this wins the runtime
-   tie-break.
+**Done since the last revision:** `report.txt` written (984 words, ~1.9 pages),
+`submission.zip` built and verified end to end.
 
-**Also outstanding:** `report.txt` (≤2 pages, 11pt Arial), and a submission
-sanity run.
-
----
+**The one real remaining gap.** Same-day swaps preserve `b_d`, so Part B's local
+search is confined to the `b` vector its construction happened to pick. Given
+the measurements above — start doesn't matter, annealing doesn't help, restarts
+don't help — a move that *changes* `b_d` is now the only change with a plausible
+path to lower cost. The B-split/merge move (turn `M`+`A`+`R` into `R`+`R`+`B`
+and back, preserving `#M+#B`, `#A+#B` and `#E`) needs two guards the reviewer
+omitted: merge only on an S day, split only while `b_d > b_lo`. It is a no-op on
+all three samples, where `b_d` is pinned to 1, and has scope on 30 of 63
+instances.
 
 ## 11. Questions a reviewer could usefully attack
 
