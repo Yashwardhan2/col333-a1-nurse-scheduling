@@ -55,7 +55,8 @@ class Instance:
     __slots__ = (
         "N", "D", "Ns", "Ng", "m", "a", "e", "T", "days", "K", "leaves",
         "surgical_day", "on_leave", "avail", "avail_surg",
-        "b_lo", "b_hi", "max_work_days", "capacity", "total_units",
+        "b_lo", "b_hi", "b_req", "b_suffix",
+        "max_work_days", "capacity", "total_units",
     )
 
     def __init__(self, N, D, Ns, Ng, m, a, e, T, days, K, leaves):
@@ -90,6 +91,15 @@ class Instance:
             if self.surgical_day[d]:
                 self.b_lo[d] = 1
                 self.b_hi[d] = min(m, a, self.avail_surg[d])
+
+        # Minimum B shifts each day needs, and the suffix sums, so day filling
+        # can tell how much of the surgical nurses' K budget is already spoken
+        # for by future surgical days.
+        self.b_req = [max(self.b_lo[d], m + a + e - self.avail[d])
+                      if self.surgical_day[d] else 0 for d in range(D)]
+        self.b_suffix = [0] * (D + 1)
+        for d in range(D - 1, -1, -1):
+            self.b_suffix[d] = self.b_suffix[d + 1] + self.b_req[d]
 
         self.max_work_days = [self._max_work_days(i) for i in range(N)]
         # Upper bound on a nurse's H8 units: every working day yields at most 2
@@ -198,8 +208,7 @@ class Instance:
         # shifts -- and every B costs 2 units of K on top. A whole-horizon count
         # misses the local squeeze: a single surgical nurse facing two adjacent
         # surgical days has ample budget overall yet cannot cover both.
-        b_req = [max(self.b_lo[d], m + a + e - self.avail[d])
-                 if self.surgical_day[d] else 0 for d in range(D)]
+        b_req = self.b_req
         if any(b_req):
             per_nurse_cap = self.K // 2
             for width in range(2, min(D, 8) + 1):
@@ -596,6 +605,17 @@ def fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware=False):
     free = [i for i in range(N)
             if not inst.on_leave[i * D + d] and units[i] < K and run[i] < 5]
 
+    # Only surgical nurses can take B, every B costs two units of K, and the
+    # remaining surgical days have a fixed B demand. When that demand nearly
+    # exhausts their budget, spending a surgical nurse on an ordinary shift is
+    # what makes a later surgical day unfillable -- so hold them back.
+    # Measured on a 2-surgical-nurse, 15-surgical-day instance where the total
+    # slack is one B: without this the greedy dies on day 28 of 30.
+    reserve_surgical = False
+    if Ns and inst.b_suffix[d]:
+        surgical_capacity = sum((K - units[i]) // 2 for i in range(Ns))
+        reserve_surgical = surgical_capacity - inst.b_suffix[d] <= 1
+
     used = [False] * N
     chosen = {}
     while need:
@@ -630,6 +650,8 @@ def fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware=False):
         # them first on nurses who cannot work tomorrow anyway -- blocking those
         # costs nothing, while blocking an available nurse eats into a quota
         # that is usually the binding one.
+        held_back = (reserve_surgical and best_shift != B)
+
         if best_shift == A:
             blocks = None
         else:
@@ -646,14 +668,16 @@ def fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware=False):
             col = None if best_shift == B else (
                 2 if best_shift == E else (1 if best_shift == A else 0))
 
-            def key(i, col=col, blocks=blocks):
+            def key(i, col=col, blocks=blocks, held=held_back):
                 spent = cnt[i][0] + cnt[i][1] if col is None else cnt[i][col]
-                return (0 if blocks is None else blocks[i],
+                return (1 if held and i < Ns else 0,
+                        0 if blocks is None else blocks[i],
                         spent, units[i], run[i], rng.random())
             best_cands.sort(key=key)
         else:
-            def key(i, blocks=blocks):
-                return (0 if blocks is None else blocks[i],
+            def key(i, blocks=blocks, held=held_back):
+                return (1 if held and i < Ns else 0,
+                        0 if blocks is None else blocks[i],
                         units[i], run[i], rng.random())
             best_cands.sort(key=key)
 

@@ -38,3 +38,7 @@ my_tests/
 *.log
 scratch/
 tmp/
+
+# ---- external checker (cloned, not ours) ----
+checker/
+check_subset/
