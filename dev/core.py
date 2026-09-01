@@ -749,11 +749,20 @@ def forward_ok(inst, d, units, last, run):
 
 # ---------------------------------------------------- tier 1: construction --
 
-def construct(inst, rng, cost_aware=False):
+def construct(inst, rng, cost_aware=False, b_policy="min"):
     """Greedy pass over the days. Returns a roster, or None on a dead end.
 
     Randomised tie-breaks make restarting a search strategy in its own right:
     each restart re-rolls the choices that led into the dead end.
+
+    b_policy chooses how many B shifts each surgical day runs. "min" is right
+    for Part A, where B is constraint-expensive (two units of K, and H6 forces
+    R or E the next day). For Part B the opposite often wins on cost: one B
+    nurse covers a morning and an afternoon that would otherwise occupy two
+    nurses, and fewer working nurses means fewer of them carrying a lopsided
+    shift profile. On a one-day horizon this is the whole objective -- every
+    working nurse costs exactly 2, so cost is 2*(m+a+e-b). Neither policy
+    dominates, so Part B builds under both and keeps the better.
     """
     N, D = inst.N, inst.D
     roster = [R] * (N * D)
@@ -764,7 +773,12 @@ def construct(inst, rng, cost_aware=False):
         b = min_b(inst, d)
         if b is None:
             return None
-        chosen = fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware)
+        chosen = None
+        if b_policy == "max" and inst.b_hi[d] > b:
+            chosen = fill_day(inst, d, inst.b_hi[d], units, last, run, cnt,
+                              rng, cost_aware)
+        if chosen is None:
+            chosen = fill_day(inst, d, b, units, last, run, cnt, rng, cost_aware)
         if chosen is None:
             return None
         for i, shift in chosen.items():
@@ -1059,18 +1073,33 @@ def solve_part_b(inst, deadline, rng=None, on_improve=None):
     # and bounded as insurance for instances unlike the ones tested, not
     # because it was shown to help; a larger share of the budget was measured
     # and simply wasted climbing time.
-    attempts_left = 8
-    gen_deadline = min(deadline, time.monotonic() + 0.02 * (deadline - time.monotonic()))
-    while attempts_left > 0 and time.monotonic() < gen_deadline:
-        attempts_left -= 1
-        roster = construct(inst, rng, cost_aware=True)
-        if roster is None or not is_valid(inst, roster):
-            continue
-        cost = objective(inst, roster)
-        if best_cost is None or cost < best_cost:
-            best_roster, best_cost = roster[:], cost
-            if on_improve is not None:
-                on_improve(best_roster, best_cost)
+    # Build under both B policies. Which one wins is instance-dependent and not
+    # predictable from the parameters: on short horizons "max" is decisively
+    # better (it matched the reference exactly on three checker instances where
+    # "min" did not), while on longer ones the extra H6 cascades can cost more
+    # than the headcount saves.
+    candidates = []
+    for policy in ("min", "max"):
+        attempts_left = 4
+        best_here = None
+        gen_deadline = min(deadline,
+                           time.monotonic() + 0.02 * (deadline - time.monotonic()))
+        while attempts_left > 0 and time.monotonic() < gen_deadline:
+            attempts_left -= 1
+            roster = construct(inst, rng, cost_aware=True, b_policy=policy)
+            if roster is None or not is_valid(inst, roster):
+                continue
+            cost = objective(inst, roster)
+            if best_here is None or cost < best_here[1]:
+                best_here = (roster[:], cost)
+        if best_here is not None:
+            candidates.append(best_here)
+
+    if candidates:
+        candidates.sort(key=lambda pair: pair[1])
+        best_roster, best_cost = candidates[0]
+        if on_improve is not None:
+            on_improve(best_roster, best_cost)
         if best_cost <= bound:
             return best_roster, best_cost
 
@@ -1082,7 +1111,20 @@ def solve_part_b(inst, deadline, rng=None, on_improve=None):
         if on_improve is not None:
             on_improve(best_roster, best_cost)
 
-    if best_cost > bound:
+    # The cheaper starting roster does not reliably stay cheaper after local
+    # search, so climb from each distinct candidate and keep the winner.
+    if best_cost > bound and candidates:
+        share = (deadline - time.monotonic()) / len(candidates)
+        for roster, _ in candidates:
+            sub = min(deadline, time.monotonic() + share)
+            found, cost = optimize(inst, roster, sub, rng, bound=bound)
+            if cost < best_cost:
+                best_roster, best_cost = found, cost
+                if on_improve is not None:
+                    on_improve(best_roster, best_cost)
+            if best_cost <= bound:
+                break
+    elif best_cost > bound:
         best_roster, best_cost = optimize(inst, best_roster, deadline, rng,
                                           bound=bound, on_improve=on_improve)
     return best_roster, best_cost
