@@ -14,8 +14,9 @@ ROOT = os.path.dirname(HERE)
 
 BANNER = '''"""COL333 Assignment 1 -- %s
 
-GENERATED FILE. Edit dev/core.py or dev/driver_%s.py and re-run dev/build.py.
-Standard library only; self-contained by design.
+Nurse rostering solved as a constraint satisfaction problem. Standard library
+only; this file is self-contained and takes an input CSV and an output JSON
+path as its two arguments.
 """
 '''
 
@@ -33,7 +34,7 @@ def build(part):
     if core.startswith('"""'):
         body = core[core.index('"""', 3) + 3:].lstrip("\n")
 
-    text = BANNER % ("Part A" if part == "a" else "Part B", part) + body + driver
+    text = BANNER % ("Part A" if part == "a" else "Part B",) + body + driver
 
     out = os.path.join(ROOT, "part_%s.py" % part)
     with open(out, "w", encoding="utf-8") as f:
