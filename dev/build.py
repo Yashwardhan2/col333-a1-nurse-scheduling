@@ -20,7 +20,9 @@ path as its two arguments.
 """
 '''
 
-ALLOWED_IMPORTS = {"csv", "json", "os", "random", "sys", "time", "collections"}
+# The Gradescope sanity check rejects "os" outright, so keep this list to
+# exactly what the submitted files are known to be allowed to import.
+ALLOWED_IMPORTS = {"csv", "json", "random", "sys", "time"}
 
 
 def build(part):

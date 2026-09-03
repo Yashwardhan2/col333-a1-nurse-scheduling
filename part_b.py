@@ -6,7 +6,6 @@ path as its two arguments.
 """
 import csv
 import json
-import os
 import random
 import sys
 import time
@@ -336,14 +335,12 @@ def roster_to_dict(inst, roster):
 
 
 def write_solution(path, obj):
-    """Write JSON so an external kill can never leave a truncated file."""
-    directory = os.path.dirname(os.path.abspath(path)) or "."
-    tmp = os.path.join(directory, "." + os.path.basename(path) + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(obj, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    """Write the roster JSON to path."""
+    # Serialise first, then write in a single call, so a kill part way through
+    # is far less likely to leave a half-written file behind.
+    text = json.dumps(obj)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 # ---- objective ----
