@@ -630,6 +630,30 @@ The transferable lesson: a review that finds nothing is not evidence that
 nothing is wrong. This one audited what the code *says* it does. The bug was in
 whether a guard actually *held* under load, which only measurement reveals.
 
+## 9e. Re-run against the updated checker
+
+The checker gained two Piazza-sourced hard instances (`T` of 1200 and 600) and,
+notably, **corrected the two reference solutions we had reported as wrong**:
+`suite_003/test8` now carries 54 keys and `suite_004/test1` 1500, matching what
+we produce. Both were previously recorded as infeasible.
+
+Re-run on the current checker, with the `os` import removed:
+
+| suite | Part A | Part B |
+|---|---|---|
+| suite_001 (1000) | **1000/1000**, 39s total with 4 jobs | — |
+| suite_002 (24) | 33/33 with suite_003 | **24/24 MATCHED** |
+| suite_003 (9) | included above | 6 MATCHED, 1 PASS; the 2 "FAIL" were our own 45s cap, and both match the reference given a realistic budget |
+| suite_004 (3) | **3/3** | **3/3 MATCHED** |
+
+The two new hard instances are solved by Part A in **0.04s** each despite their
+1200s and 600s budgets, and Part B matches the reference on both within 25s.
+
+Removing `os` cost the atomic output write, so the roster is now serialised and
+written in a single call. Checked by killing Part B with SIGKILL at three
+different points mid-run: every time the output file existed and the official
+verifier accepted it.
+
 ## 10. Remaining work
 
 **Done since the last revision:** `report.txt` written (984 words, ~1.9 pages),
